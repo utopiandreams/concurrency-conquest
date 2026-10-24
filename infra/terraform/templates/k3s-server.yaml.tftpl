@@ -1,0 +1,29 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+timezone: Asia/Seoul
+
+users:
+  - name: ${user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_key}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - curl
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - >-
+    curl -sfL https://get.k3s.io |
+    INSTALL_K3S_CHANNEL=stable
+    K3S_TOKEN='${k3s_token}'
+    sh -s - server
+    --node-ip ${ip}
+    --tls-san ${ip}
+    --node-label ${node_label}
+    --write-kubeconfig-mode 644

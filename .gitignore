@@ -1,0 +1,27 @@
+# Terraform — 비밀값/상태 파일은 절대 커밋 금지
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+crash.log
+*.tfplan
+
+# 비밀값
+.env
+.env.*
+*.pem
+*.key
+kubeconfig*
+
+# Gradle / Kotlin
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store

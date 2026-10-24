@@ -1,0 +1,23 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+timezone: Asia/Seoul
+
+users:
+  - name: ${user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_key}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - curl
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  # MySQL 등은 다음 단계에서 docker compose로 올린다
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${user}
