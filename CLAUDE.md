@@ -42,7 +42,8 @@
 - 원장(ledger)과 지갑(wallet) 분리, 지갑에 `last_ledger_id` 보유 (당시 실제 구조)
 
 ## 기술 스택
-- Kotlin, Spring Boot 3.5, JDK 21, Gradle Kotlin DSL 멀티모듈 (service, vbank-sim)
+- Kotlin 2.3, Spring Boot 4.1, JDK 21 (Gradle 툴체인이 자동 설치), Gradle 9 Kotlin DSL 멀티모듈 (service, vbank-sim)
+- service와 vbank-sim은 코드를 공유하지 않는다. vbank-sim은 외부 시스템 역할이고, service는 가상계좌 DB를 SQL로만 읽는다.
 - Spring Data JPA + 원자적 UPDATE는 JPQL/네이티브, 대량 INSERT는 JdbcTemplate
 - MySQL 8.4 LTS, Flyway, Spring Batch(API 트리거), Redis + Redisson(분산 락)
 - 테스트: JUnit 5, Testcontainers(MySQL, Redis), 동시성 테스트(ExecutorService + CountDownLatch)
@@ -50,14 +51,20 @@
 - 이미지: Jib → GHCR. 배포: 처음엔 kubectl apply, 이후 GitHub Actions(CI) + Argo CD(GitOps, 클러스터가 pull → 집 서버를 외부에 열지 않음)
 - 비밀값: 공개 저장소이므로 Sealed Secrets
 
-## 지금 할 일 (우선순위: 동시성 실험에 집중, CI/CD는 나중)
-1. Git 저장소 초기화. `.gitignore` 확인: terraform.tfvars, *.tfstate 절대 커밋 금지
-2. svc-db에 MySQL 8.4 docker compose (+ 나중에 mysqld-exporter)
-3. 서비스 서버 뼈대: 지갑, 원장, 입금 API, 차감 API
-4. **차감 방식 4가지를 별도 API로**: JPA 변경 감지 / 원자적 UPDATE / SELECT FOR UPDATE / @Version + 재시도
-5. k3s 배포 매니페스트 (role=app 노드에 배치)
-6. k6 시나리오 1: 같은 지갑에 입금·차감 동시 요청 → 종료 후 `wallet.balance` vs `SUM(ledger)` 비교
-7. 결과 정리 → 블로그 #1 "입금 5만 원이 사라졌다: Lost Update"
+## 단계 관리 규칙
+- **비교 대상은 코드에 공존시킨다.** 같은 인터페이스의 구현체로 두고 요청 파라미터나 설정으로 선택한다 (예: `DebitStrategy`, `DebitMethod`).
+- **스키마는 모든 전략의 합집합.** Flyway 마이그레이션은 추가만 한다. 적용된 V 파일은 수정하지 않는다.
+- 서로 충돌하는 구조(예: unique 있음/없음)만 예외로, 그 실험 단계에서 처리 방법을 정한다.
+- 실험 결과는 `docs/experiments/NN-*.md`에 문제 → 재현 → 숫자 → 해결 → 숫자 순으로 쓴다.
+
+## 지금 할 일 (학습 우선: 하나씩 제대로 구현하고 이해한다)
+1. ~~Git 저장소, svc-db MySQL, 스키마 설계 v1~~ (완료)
+2. ~~서비스 뼈대 + 차감 v1(변경 감지) + Testcontainers로 Lost Update 재현~~ (완료, `docs/experiments/01-lost-update.md`)
+3. 차감 v2~v4 추가: 원자적 UPDATE / SELECT FOR UPDATE / @Version + 재시도 (V2 마이그레이션으로 version 컬럼)
+4. CI: GitHub Actions 빌드·테스트 + Jib 이미지 GHCR push
+5. k3s 수동 배포(role=app) → k6 시나리오 1 → 방식별 정합성·TPS·p99 → 블로그 #1
+6. CD: Argo CD + Sealed Secrets
+7. 운영 화면: 처음엔 Grafana + MySQL 데이터소스로 정합성·누락 확인, 조작 화면이 필요하면 간단한 관리자 페이지
 
 ## 이후 시나리오
 | 시나리오 | 드러나는 것 |

@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: service
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:3306/wallet
+    username: ${DB_USERNAME:app}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate # 스키마는 Flyway가 만든다. JPA는 엔티티와 맞는지 검사만
+  flyway:
+    locations: classpath:db/migration
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
