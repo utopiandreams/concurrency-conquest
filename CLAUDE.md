@@ -23,23 +23,26 @@
 | k3s-w1 | 211 | 172.30.1.211 | 4 / 6GB | 서비스 서버 (label role=app) |
 | k3s-w2 | 212 | 172.30.1.212 | 4 / 6GB | 모니터링 (label role=monitoring) |
 | svc-db | 220 | 172.30.1.220 | 4 / 5GB | 서비스 MySQL 8.4 (Docker) |
-| hecto | 221 | 172.30.1.221 | 2 / 3GB | 헥토 데몬 시뮬레이터 + 입금 MySQL (Docker) |
+| hecto | 221 | 172.30.1.221 | 2 / 3GB | 가상계좌 데몬 시뮬레이터(vbank-sim) + 가상계좌 MySQL (Docker) |
 
 - VM은 `infra/terraform`으로 생성 (bpg/proxmox provider, cloud-init으로 k3s/Docker 설치). VM 계정 `dev`, 맥북 SSH 키로 접속.
-- **현재 상태:** VM 5대 생성 완료, k3s 노드 3대 Ready, 시스템 파드 정상. 앱 파드는 아직 없음. svc-db/hecto는 Docker만 설치됨.
+- **현재 상태:** VM 5대 생성 완료, k3s 노드 3대 Ready, 시스템 파드 정상. 앱 파드는 아직 없음. svc-db는 MySQL 8.4 가동 중(`infra/svc-db`, DB `wallet`, 계정 `app`, 테이블 없음). hecto는 Docker만 설치됨.
 
 ## 아키텍처
 ```
 [맥북 k6] → 서비스 서버(k3s) ── 서비스 MySQL(svc-db)
-                 └ 입금 폴러 ──(offset 폴링)──→ 입금 MySQL(hecto VM, 헥토 시뮬레이터가 INSERT)
+                 └ 입금 폴러 ──(체크포인트 폴링)──→ 가상계좌 MySQL(hecto VM, vbank-sim이 INSERT)
             모니터링: Prometheus + Grafana (k3s, w2)
 ```
-- 입금 흐름: 폴러가 입금 테이블을 offset 기준으로 읽음 → 트랜잭션: 원장 INSERT(거래ID unique) → 지갑 반영 → offset 갱신
+- **명명:** 공개 저장소이므로 코드·테이블에는 벤더 이름 대신 `vbank`를 쓴다 (모듈 `vbank-sim`, 테이블 `vbank_*`). VM 이름 `hecto`는 재생성할 때 바꾼다.
+- 가상계좌 DB는 입금 사실만 기록한다 (지갑 개념 없음, 입금취소 없음). 지갑·서비스 원장은 서비스 DB에만 있다.
+- 입금 흐름: 폴러가 `deposited_at >= 체크포인트`로 읽음(초 단위, 마지막 초 재조회) → SELECT로 중복 확인 → 서비스 DB 트랜잭션: 원장 INSERT → 지갑 반영 → 커밋 → **그 뒤 가상계좌 DB의 체크포인트 갱신 (별도 DB, 별도 커밋)**
+- 스키마와 당시 구조 대비 차이는 `docs/design/schema.md`
 - 차감: 맥북 k6가 차감 API 호출 + 하루 4회 차감 배치 API(당시 Jenkins가 호출하던 구조 재현)
 - 원장(ledger)과 지갑(wallet) 분리, 지갑에 `last_ledger_id` 보유 (당시 실제 구조)
 
 ## 기술 스택
-- Kotlin, Spring Boot 3.5, JDK 21, Gradle Kotlin DSL 멀티모듈 (service, hecto-sim)
+- Kotlin, Spring Boot 3.5, JDK 21, Gradle Kotlin DSL 멀티모듈 (service, vbank-sim)
 - Spring Data JPA + 원자적 UPDATE는 JPQL/네이티브, 대량 INSERT는 JdbcTemplate
 - MySQL 8.4 LTS, Flyway, Spring Batch(API 트리거), Redis + Redisson(분산 락)
 - 테스트: JUnit 5, Testcontainers(MySQL, Redis), 동시성 테스트(ExecutorService + CountDownLatch)
@@ -61,14 +64,15 @@
 |---|---|
 | 핫 로우: 지갑 1개 vs 1만 개, 방식별 TPS·p99 | 락 경합, 파드를 늘려도 DB가 병목 |
 | 납부일 직전 입금 폭주 + 차감 배치 | 지갑 경합, 락 대기 |
-| offset 폴링 + 늦게 커밋되는 입금 | 입금 누락 (auto increment 커밋 순서 문제) |
-| 폴러 크래시 (원장 INSERT 후 offset 갱신 전) | 재컨슘 멱등성 |
+| 초 단위 체크포인트 폴링 + 늦게 커밋되는 입금 | 입금 누락 (마지막 1초만 재조회하는 한계) |
+| 폴러 크래시 (서비스 커밋 후 체크포인트 갱신 전) | 두 DB 별도 커밋, 재컨슘 멱등성 |
 | 배치 API 타임아웃 → 재호출 | 이중 차감 시도, 멱등성 |
 | 배치 도중 롤링 배포 | 부분 처리, graceful shutdown |
 | 한 트랜잭션 배치 vs 청크 커밋 | 입금 반영 지연 |
 | 트랜잭션 안 외부 호출(알림) 지연 | 커넥션 풀 고갈, 장애 전파 |
 | checked 예외 롤백 누락 (실제 겪은 버그) | 정합성 검증 배치가 불일치 탐지 |
 | 따닥 요청 (분산 락) | 락과 트랜잭션 경계 |
+| 폴러 2대 (롤링 배포 겹침) | SELECT 멱등 체크 경쟁 조건, unique 제약 |
 | (2단계) Outbox + Kafka | 메시지 유실, 중복, 컨슈머 lag |
 | (4단계) 외부 연동 지연: 스레드/가상 스레드/코루틴/WebFlux 비교 | 동시성 모델별 한계 |
 
